@@ -51,6 +51,7 @@ trap(struct trapframe *tf)
     if(cpuid() == 0){
       acquire(&tickslock);
       ticks++;
+      update_timing();
       wakeup(&ticks);
       release(&tickslock);
     }
@@ -100,13 +101,32 @@ trap(struct trapframe *tf)
   if(myproc() && myproc()->killed && (tf->cs&3) == DPL_USER)
     exit();
 
-  // Force process to give up CPU on clock tick.
-  // If interrupts were on while locks held, would need to check nlock.
-  if(myproc() && myproc()->state == RUNNING &&
-     tf->trapno == T_IRQ0+IRQ_TIMER)
-    yield();
+  // Run the code that will update the running process location in the process table.
 
-  // Check if the process has been killed since we yielded
-  if(myproc() && myproc()->killed && (tf->cs&3) == DPL_USER)
-    exit();
+  #if !defined(FCFS)
+    // cprintf("It never got here\n");
+    
+    // Force process to give up CPU on clock tick.
+    // If interrupts were on while locks held, would need to check nlock.
+    if(myproc() && myproc()->state == RUNNING && tf->trapno == T_IRQ0+IRQ_TIMER) {
+      yield();
+      #ifdef MLFQ
+        int to_punish = VMLFQ(myproc()->cur_queue, myproc()->time_slices);
+        if (to_punish == -1)
+          return;
+
+        if (to_punish == 1) {
+          punisher();
+          yield();
+        } else {
+          inc_timeslice();
+          return;
+        }
+      #endif
+    }
+
+    // Check if the process has been killed since we yielded
+    if(myproc() && myproc()->killed && (tf->cs&3) == DPL_USER)
+      exit();
+  #endif
 }

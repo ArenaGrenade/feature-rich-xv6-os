@@ -9,6 +9,7 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+typedef struct _Queue Queue;
 
 // bio.c
 void            binit(void);
@@ -118,8 +119,14 @@ void            setproc(struct proc*);
 void            sleep(void*, struct spinlock*);
 void            userinit(void);
 int             wait(void);
+int             waitx(uint* wtime, uint* rtime);
 void            wakeup(void*);
 void            yield(void);
+int             set_priority(int new_priority, int pid);
+int             ps(void);
+void            punisher(void);
+void            inc_timeslice(void);
+void            update_timing(void);
 
 // swtch.S
 void            swtch(struct context**, struct context*);
@@ -186,5 +193,27 @@ void            switchkvm(void);
 int             copyout(pde_t*, uint, void*, uint);
 void            clearpteu(pde_t *pgdir, char *uva);
 
+// queue.c
+void            push(Queue* queue, struct proc* proc);
+Queue*          pop(Queue* queue);
+void            display(Queue* queue);
+int             get_size(Queue* queue);
+
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+// Check if MLFQ timeslice property has been violated
+// a is the priority queue of the process
+// b is the time slices it has used
+// Here (1 << a) for values of a are the max allowed timeslices
+// (1 << 0) -> 1
+// (1 << 1) -> 2
+// (1 << 2) -> 4
+// (1 << 3) -> 8
+// (1 << 4) -> 16 
+// Return -1 on error, 1 when preemption needs to occur and 0 on no preemption
+#define VMLFQ(a, b) (\
+    (a > NPROC)?\
+    -1: /*Error as the maximum number of queues are 5*/ \
+    ((1 << a == b)? 1: 0)\
+)

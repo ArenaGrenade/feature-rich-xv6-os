@@ -12,6 +12,8 @@ struct {
   struct proc proc[NPROC];
 } ptable;
 
+Queue *queues[MLFQSIZE];
+
 static struct proc *initproc;
 
 int nextpid = 1;
@@ -24,6 +26,22 @@ void
 pinit(void)
 {
   initlock(&ptable.lock, "ptable");
+
+  #ifdef MLFQ
+    // Initializes all the queues
+
+    acquire(&ptable.lock);
+
+    int id_count = 0;
+    cprintf("Allocating the queues\n");
+    for (int i = 0; i < MLFQSIZE; i++) {
+      // queues[i]->rear = queues[i]->front = -1;
+      queues[i]->queue_id = id_count++;
+      cprintf("Allocated queue %d\n", id_count - 1);
+    }
+    release(&ptable.lock);
+    cprintf("Allocated all queues\n");
+  #endif
 }
 
 // Must be called with interrupts disabled
@@ -112,6 +130,26 @@ found:
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
 
+  acquire(&ptable.lock);
+  // Set the process start time here.
+  p->ctime = ticks;
+
+  // Set all default values at the start
+  p->etime = 0;
+  p->rtime = 0;
+  p->wtime = 0;
+  p->iotime = 0;
+  p->n_shed = 0;
+  p->punish = 0;
+  p->time_slices = 0;
+
+  // Set default priority based on process
+  if (p->pid == 1 || p->pid == 2) 
+    p->priority = 1;
+  else
+    p->priority = 60;
+  release(&ptable.lock);
+
   return p;
 }
 
@@ -151,6 +189,29 @@ userinit(void)
   p->state = RUNNABLE;
 
   release(&ptable.lock);
+
+  #ifdef RR
+    cprintf("\n\nUsing standard round-robin scheduler\n\n");
+  #else
+  #ifdef FCFS
+    cprintf("\n\nUsing FCFS scheduler\n\n");
+  #else
+  #ifdef PBS
+    cprintf("\n\nUsing Priority based Scheduler\n\n");
+  #else
+  #ifdef MLFQ
+    cprintf("On MLFQ init proc\n");
+    acquire(&ptable.lock);
+    push(queues[0], p);
+    cprintf("Passed push\n");
+    p->cur_queue = 0;
+    release(&ptable.lock);
+    display(queues[0]);
+    cprintf("\n\nUsing Multi-level Feedback Queue Scheduler\n\n");
+  #endif
+  #endif
+  #endif
+  #endif
 }
 
 // Grow current process's memory by n bytes.
@@ -218,6 +279,15 @@ fork(void)
 
   release(&ptable.lock);
 
+  #ifdef MLFQ
+    acquire(&ptable.lock);
+    push(queues[0], np);
+    np->cur_queue = 0;
+    release(&ptable.lock);
+    display(queues[0]);
+    cprintf("\n\nUsing Multi-level Feedback Queue Scheduler\n\n");
+  #endif
+
   return pid;
 }
 
@@ -263,6 +333,11 @@ exit(void)
 
   // Jump into the scheduler, never to return.
   curproc->state = ZOMBIE;
+
+  // Mark the end time of a process
+  curproc->etime = ticks;
+  // cprintf("Process end time is %d\n", curproc->etime);
+  // ps();
   sched();
   panic("zombie exit");
 }
@@ -311,6 +386,133 @@ wait(void)
   }
 }
 
+// Waitx system call and is an exact copy of the wait call
+// Wait for a child process to exit and return its pid.
+// Return -1 if this process has no children.
+int
+waitx(uint* wtime, uint* rtime)
+{
+  struct proc *p;
+  int havekids, pid;
+  struct proc *curproc = myproc();
+  
+  acquire(&ptable.lock);
+  for(;;){
+    // Scan through table looking for exited children.
+    havekids = 0;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->parent != curproc)
+        continue;
+      havekids = 1;
+      if(p->state == ZOMBIE){
+        // Assign the wait times and run times to the variable provided to us
+        cprintf(
+          "\nProcess started at %d and ran for %d, waited for %d, slept for %d and ended at %d and entered scheduler for %d times with %d cpus\n", 
+          p->ctime, p->rtime, p->wtime / ncpu, p->iotime / ncpu, p->etime, p->n_shed, ncpu
+        );
+        // cprintf("This process had priority %d\n", p->priority);
+        *wtime = p->wtime / ncpu;
+        *rtime = p->rtime;
+
+        // Found one.
+        pid = p->pid;
+        kfree(p->kstack); 
+        p->kstack = 0;
+        freevm(p->pgdir);
+        p->pid = 0;
+        p->parent = 0;
+        p->name[0] = 0;
+        p->killed = 0;
+        // p->state = UNUSED;
+        release(&ptable.lock);
+        return pid;
+      }
+    }
+
+    // No point waiting if we don't have any children.
+    if(!havekids || curproc->killed){
+      release(&ptable.lock);
+      return -1;
+    }
+
+    // Wait for children to exit.  (See wakeup1 call in proc_exit.)
+    sleep(curproc, &ptable.lock);  //DOC: wait-sleep
+  }
+}
+
+// Updates the timing vales for all processes in the proc table
+// for every clock tick - might not be desired
+void
+update_timing() {
+  acquire(&ptable.lock);
+
+  for(struct proc *p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->state == RUNNING) p->rtime++;
+    else if (p->state == RUNNABLE) p->wtime++;
+    else if (p->state == SLEEPING) p->iotime++;
+  }
+
+  release(&ptable.lock);
+}
+
+// Set process priority
+int
+set_priority(int new_priority, int pid) {
+  struct proc *p;
+  sti(); // Enable interrupts
+
+  if(new_priority < 0 || new_priority > 100) {
+    cprintf("Out of bounds priority. Priority can only be between 0 and 100.\n");
+    return -1;
+  }
+
+  int old_priority = -1;
+
+  acquire(&ptable.lock);
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if(p->pid == pid) {
+      old_priority = p->priority;
+      p->priority = new_priority;
+      break;
+    }
+  }
+  release(&ptable.lock);
+
+  if (old_priority == -1 || p->priority != new_priority) 
+    return -1;
+  
+  if (myproc()->pid == pid)
+    yield();
+
+  // cprintf("Process %d with a priority %d has been given a priority of %d\n", pid, old_priority, new_priority);
+  return old_priority;
+}
+
+// Punisher
+void punisher() {
+  acquire(&ptable.lock);
+  myproc()->punish = 1;
+  release(&ptable.lock);
+}
+
+// Increase time slice of process
+void inc_timeslice() {
+  acquire(&ptable.lock);
+  myproc()->time_slices++;
+  release(&ptable.lock);
+}
+
+// Process Ager - this basically looks at all the processes and ages them accordingly.
+// returns if the queue was found empty or not
+int age_processes(int queue_id) {
+  // cprintf("We are ageing the queue %d\n", queue_id);
+  if (queues[queue_id]->front == -1 && queues[queue_id]->rear == -1) return 1;
+  else {
+    // Code for ageing here.
+    return 0;
+  }
+}
+
 //PAGEBREAK: 42
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
@@ -325,7 +527,73 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
-  
+
+  #if defined(PBS) || defined(FCFS)
+    struct proc* p1;
+  #endif
+
+  #ifdef MLFQ
+    while (1) {
+      sti();
+
+      acquire(&ptable.lock);
+
+      for (int i = 1; i < MLFQSIZE; i++)
+        age_processes(i);
+      
+      p = 0;
+      for (int i = 0; i < MLFQSIZE; i++) {
+        if (get_size(queues[i]) == 0) {
+          continue;
+        }
+        p = queues[i]->arr[0];
+        pop(queues[i]);
+        break;
+      }
+
+      if (p == 0 || p->state != RUNNABLE) {
+        release(&ptable.lock);
+        continue;
+      }
+
+      cprintf("Sending process %d to run\n", p->pid);
+
+      p->time_slices++;
+      p->n_shed++;
+
+      // Switch to chosen process. It is the process's job
+      // to release ptable.lock and then reacquire it
+      // before jumping back to us.
+      c->proc = p;
+      switchuvm(p);
+      p->state = RUNNING;
+
+      swtch(&(c->scheduler), p->context);
+      switchkvm();
+
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      c->proc = 0;
+
+      // Back from p
+      if (p != 0 && p->state == RUNNABLE) {
+        if (p->punish == 0) {
+          p->time_slices = 0;
+          // p->age_time = ticks;
+        } else {
+          p->time_slices = 0;
+          p->punish = 0;
+          // p->age_time = ticks;
+          
+          if (p->cur_queue != MLFQSIZE - 1)
+            p->cur_queue++;
+        }
+        push(queues[p->cur_queue], p);
+      }
+
+      release(&ptable.lock);
+    }
+  #else  
   for(;;){
     // Enable interrupts on this processor.
     sti();
@@ -333,8 +601,29 @@ scheduler(void)
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
+      if (p->state != RUNNABLE)
         continue;
+      #ifndef RR
+      struct proc* chosen_proc = p;
+      for (p1 = ptable.proc; p1 < &ptable.proc[NPROC]; p1++) {
+        if (p1->state != RUNNABLE)
+          continue;
+
+        #ifdef FCFS
+        if (p1->ctime < chosen_proc->ctime)
+          chosen_proc = p1; 
+        #else   
+        #ifdef PBS
+        if (p1->priority < chosen_proc->priority)
+          chosen_proc = p1;
+        #endif
+        #endif
+      }
+      p = chosen_proc;
+      #endif
+
+      p->n_shed++;
+      p->time_slices++;
 
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
@@ -351,8 +640,8 @@ scheduler(void)
       c->proc = 0;
     }
     release(&ptable.lock);
-
   }
+  #endif
 }
 
 // Enter scheduler.  Must hold only ptable.lock
@@ -531,4 +820,33 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+// ps command that lists process details as a table
+int
+ps(void) {
+  struct proc *p;
+  sti();
+
+  cprintf("PID \t Prior \t State \t rtime \t wtime \t nruns \t curq \t q0 \t q1 \t q2 \t q3 \t q4\n");
+
+  static char *states[] = {
+    [EMBRYO]    "EMBRYO",
+    [SLEEPING]  "SLEEP",
+    [RUNNABLE]  "WAIT",
+    [RUNNING]   "RUN",
+    [ZOMBIE]    "ZOMB"
+  };
+
+  acquire(&ptable.lock);
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->state == UNUSED) 
+      continue;
+
+    cprintf("%d \t %d \t %s \t", p->pid, p->priority, states[p->state]);
+    cprintf(" %d \t %d \t %d\n", p->rtime, p->wtime / ncpu, p->n_shed);
+  }
+  release(&ptable.lock);
+
+  return 0;
 }

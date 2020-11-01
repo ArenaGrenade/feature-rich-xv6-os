@@ -24,6 +24,13 @@ char* sbrk(int);
 int sleep(int);
 int uptime(void);
 
+// Waitx system call's corresponding user command
+int waitx(uint* wtime, uint* rtime);
+// Set priority for a process for PBS scheduling
+int set_priority(int new_priority, int pid);
+// Get a view of current process table
+int ps(void);
+
 // ulib.c
 int stat(const char*, struct stat*);
 char* strcpy(char*, const char*);

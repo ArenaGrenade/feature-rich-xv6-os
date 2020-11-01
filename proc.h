@@ -49,6 +49,23 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  // Added to keep track of time
+  uint ctime; // Process creation time
+  uint etime; // Process end time
+  uint rtime; // Process running time
+  uint wtime; // Process waiting time
+  uint iotime; // Process sleeping or I/O time
+
+  // Priority for PBS scheduling
+  int priority; // Value between 0 and 100. Lower number, higher priority.
+
+  int n_shed; // Number of time the process is getting scheduled
+
+  // MLFQ queue details.
+  int cur_queue; // The queue in which the process is currently in
+  int time_slices; // The number of time slices that the process spends in getting scheduled
+  int punish;
 };
 
 // Process memory is laid out contiguously, low addresses first:
@@ -56,3 +73,16 @@ struct proc {
 //   original data and bss
 //   fixed-size stack
 //   expandable heap
+
+
+// Queue Node definition
+typedef struct _Queue 
+{ 
+  int queue_id;
+
+  // Initialize front and rear 
+  int rear, front; 
+
+  // Circular Queue
+  struct proc* arr[NPROC];
+} Queue;
