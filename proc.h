@@ -66,6 +66,8 @@ struct proc {
   int cur_queue; // The queue in which the process is currently in
   int time_slices; // The number of time slices that the process spends in getting scheduled
   int punish;
+  int queue_ticks[MLFQSIZE];
+  int mlfq_wtime;
 };
 
 // Process memory is laid out contiguously, low addresses first:

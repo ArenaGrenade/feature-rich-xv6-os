@@ -12,7 +12,7 @@ struct {
   struct proc proc[NPROC];
 } ptable;
 
-Queue *queues[MLFQSIZE];
+Queue queues[MLFQSIZE];
 
 static struct proc *initproc;
 
@@ -33,14 +33,11 @@ pinit(void)
     acquire(&ptable.lock);
 
     int id_count = 0;
-    cprintf("Allocating the queues\n");
     for (int i = 0; i < MLFQSIZE; i++) {
-      // queues[i]->rear = queues[i]->front = -1;
-      queues[i]->queue_id = id_count++;
-      cprintf("Allocated queue %d\n", id_count - 1);
+      queues[i].rear = queues[i].front = -1;
+      queues[i].queue_id = id_count++;
     }
     release(&ptable.lock);
-    cprintf("Allocated all queues\n");
   #endif
 }
 
@@ -133,6 +130,7 @@ found:
   acquire(&ptable.lock);
   // Set the process start time here.
   p->ctime = ticks;
+  cprintf("%d moved from %d to %d at %d\n", p->pid, -1, 0, p->ctime);
 
   // Set all default values at the start
   p->etime = 0;
@@ -142,6 +140,10 @@ found:
   p->n_shed = 0;
   p->punish = 0;
   p->time_slices = 0;
+  p->mlfq_wtime = 0;
+
+  for (int i = 0; i < MLFQSIZE; i++)
+    p->queue_ticks[i] = 0;
 
   // Set default priority based on process
   if (p->pid == 1 || p->pid == 2) 
@@ -200,13 +202,11 @@ userinit(void)
     cprintf("\n\nUsing Priority based Scheduler\n\n");
   #else
   #ifdef MLFQ
-    cprintf("On MLFQ init proc\n");
     acquire(&ptable.lock);
-    push(queues[0], p);
-    cprintf("Passed push\n");
+    push(&queues[0], p);
     p->cur_queue = 0;
     release(&ptable.lock);
-    display(queues[0]);
+    // display(&queues[0]);
     cprintf("\n\nUsing Multi-level Feedback Queue Scheduler\n\n");
   #endif
   #endif
@@ -281,11 +281,10 @@ fork(void)
 
   #ifdef MLFQ
     acquire(&ptable.lock);
-    push(queues[0], np);
+    push(&queues[0], np);
     np->cur_queue = 0;
     release(&ptable.lock);
-    display(queues[0]);
-    cprintf("\n\nUsing Multi-level Feedback Queue Scheduler\n\n");
+    // display(&queues[0]);
   #endif
 
   return pid;
@@ -338,6 +337,10 @@ exit(void)
   curproc->etime = ticks;
   // cprintf("Process end time is %d\n", curproc->etime);
   // ps();
+  /*for (int i = 0; i < MLFQSIZE; i++)
+    display(&queues[i]);
+  cprintf("\n");*/
+  cprintf("%d moved from %d to %d at %d\n", curproc->pid, curproc->cur_queue, -1, ticks);
   sched();
   panic("zombie exit");
 }
@@ -406,10 +409,10 @@ waitx(uint* wtime, uint* rtime)
       havekids = 1;
       if(p->state == ZOMBIE){
         // Assign the wait times and run times to the variable provided to us
-        cprintf(
+        /*cprintf(
           "\nProcess started at %d and ran for %d, waited for %d, slept for %d and ended at %d and entered scheduler for %d times with %d cpus\n", 
           p->ctime, p->rtime, p->wtime / ncpu, p->iotime / ncpu, p->etime, p->n_shed, ncpu
-        );
+        );*/
         // cprintf("This process had priority %d\n", p->priority);
         *wtime = p->wtime / ncpu;
         *rtime = p->rtime;
@@ -423,7 +426,7 @@ waitx(uint* wtime, uint* rtime)
         p->parent = 0;
         p->name[0] = 0;
         p->killed = 0;
-        // p->state = UNUSED;
+        p->state = UNUSED;
         release(&ptable.lock);
         return pid;
       }
@@ -448,7 +451,10 @@ update_timing() {
 
   for(struct proc *p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
     if (p->state == RUNNING) p->rtime++;
-    else if (p->state == RUNNABLE) p->wtime++;
+    else if (p->state == RUNNABLE) {
+      p->wtime++;
+      p->mlfq_wtime++;
+    }
     else if (p->state == SLEEPING) p->iotime++;
   }
 
@@ -503,12 +509,59 @@ void inc_timeslice() {
 }
 
 // Process Ager - this basically looks at all the processes and ages them accordingly.
-// returns if the queue was found empty or not
 int age_processes(int queue_id) {
   // cprintf("We are ageing the queue %d\n", queue_id);
-  if (queues[queue_id]->front == -1 && queues[queue_id]->rear == -1) return 1;
+  if (queues[queue_id].front == -1 && queues[queue_id].rear == -1) return 1;
   else {
     // Code for ageing here.
+    int front_pos = queues[queue_id].front;
+    int rear_pos = queues[queue_id].rear;
+
+    struct proc* p;
+
+    if (front_pos == -1 || rear_pos == -1) {
+        return -1;
+    }
+    // cprintf("we have %d -- %d\n", front_pos, rear_pos);
+
+    if (front_pos <= rear_pos) {
+      while(front_pos <= rear_pos) {
+        front_pos++;
+        p = pop(&queues[queue_id]);
+        if (p == 0) continue;
+        if (p->mlfq_wtime / NCPU > AGE_THRES && p->cur_queue != 0) {
+          p->cur_queue--;
+          p->mlfq_wtime = 0;
+          cprintf("%d moved from %d to %d at %d\n", p->pid, p->cur_queue + 1, p->cur_queue, ticks);
+        }
+        push(&queues[p->cur_queue], p);
+      }
+    }
+    else {
+      while (front_pos <= MLFQSIZE - 1) {
+        front_pos++;
+        p = pop(&queues[queue_id]);
+        if (p == 0) continue;
+        if (p->mlfq_wtime / NCPU > AGE_THRES && p->cur_queue != 0) {
+          p->cur_queue--;
+          p->mlfq_wtime = 0;
+          cprintf("%d moved from %d to %d at %d\n", p->pid, p->cur_queue + 1, p->cur_queue, ticks);
+        }
+        push(&queues[p->cur_queue], p);
+      }
+      front_pos = 0;
+      while (front_pos <= rear_pos) {
+        front_pos++;
+        p = pop(&queues[queue_id]);
+        if (p == 0) continue;
+        if (p->mlfq_wtime / NCPU > AGE_THRES && p->cur_queue != 0) {
+          p->cur_queue--;
+          p->mlfq_wtime = 0;
+          cprintf("%d moved from %d to %d at %d\n", p->pid, p->cur_queue + 1, p->cur_queue, ticks);
+        }
+        push(&queues[p->cur_queue], p);
+      }
+    }
     return 0;
   }
 }
@@ -543,11 +596,11 @@ scheduler(void)
       
       p = 0;
       for (int i = 0; i < MLFQSIZE; i++) {
-        if (get_size(queues[i]) == 0) {
+        if (get_size(&queues[i]) == 0) {
           continue;
         }
-        p = queues[i]->arr[0];
-        pop(queues[i]);
+        p = queues[i].arr[queues[i].front];
+        pop(&queues[i]);
         break;
       }
 
@@ -556,10 +609,10 @@ scheduler(void)
         continue;
       }
 
-      cprintf("Sending process %d to run\n", p->pid);
+      // cprintf("Sending process %d to run\n", p->pid);
 
-      p->time_slices++;
       p->n_shed++;
+      p->mlfq_wtime = 0;
 
       // Switch to chosen process. It is the process's job
       // to release ptable.lock and then reacquire it
@@ -577,23 +630,30 @@ scheduler(void)
 
       // Back from p
       if (p != 0 && p->state == RUNNABLE) {
+        p->queue_ticks[p->cur_queue]++;
+        // cprintf("%d -- %d in trap\n", (1 << p->cur_queue), p->time_slices);
         if (p->punish == 0) {
-          p->time_slices = 0;
+          // p->time_slices = 0;
           // p->age_time = ticks;
         } else {
           p->time_slices = 0;
           p->punish = 0;
           // p->age_time = ticks;
           
-          if (p->cur_queue != MLFQSIZE - 1)
+          if (p->cur_queue != MLFQSIZE - 1) {
             p->cur_queue++;
+            cprintf("%d moved from %d to %d at %d\n", p->pid, p->cur_queue - 1, p->cur_queue, ticks);
+            // cprintf("Shifted current queue to %d\n", p->cur_queue);
+          }
         }
-        push(queues[p->cur_queue], p);
+        push(&queues[p->cur_queue], p);
+        /*for (int i = 0; i < MLFQSIZE; i++)
+          display(&queues[i]); 
+        cprintf("\n");*/
       }
-
       release(&ptable.lock);
     }
-  #else  
+  #else
   for(;;){
     // Enable interrupts on this processor.
     sti();
@@ -623,7 +683,6 @@ scheduler(void)
       #endif
 
       p->n_shed++;
-      p->time_slices++;
 
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
@@ -748,9 +807,17 @@ wakeup1(void *chan)
 {
   struct proc *p;
 
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == SLEEPING && p->chan == chan)
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if(p->state == SLEEPING && p->chan == chan) {
       p->state = RUNNABLE;
+
+      #ifdef MLFQ
+        push(&queues[p->cur_queue], p);
+        p->time_slices = 0;
+        // p->age_time = ticks;
+      #endif
+    }
+  }
 }
 
 // Wake up all processes sleeping on chan.
@@ -775,8 +842,15 @@ kill(int pid)
     if(p->pid == pid){
       p->killed = 1;
       // Wake process from sleep if necessary.
-      if(p->state == SLEEPING)
+      if(p->state == SLEEPING) {
         p->state = RUNNABLE;
+
+        #ifdef MLFQ
+          push(&queues[p->cur_queue], p);
+          p->time_slices = 0;
+          // p->age_time = ticks;
+        #endif
+      }
       release(&ptable.lock);
       return 0;
     }
@@ -843,8 +917,28 @@ ps(void) {
     if (p->state == UNUSED) 
       continue;
 
-    cprintf("%d \t %d \t %s \t", p->pid, p->priority, states[p->state]);
-    cprintf(" %d \t %d \t %d\n", p->rtime, p->wtime / ncpu, p->n_shed);
+    #ifdef PBS
+      cprintf("%d \t %d \t %s \t", p->pid, p->priority, states[p->state]);
+    #else
+      cprintf("%d \t NO \t %s \t", p->pid, states[p->state]);
+    #endif
+
+    cprintf(" %d \t", p->rtime);
+
+    #ifdef MLFQ
+      cprintf(" %d \t %d \t %d \t", p->mlfq_wtime / ncpu, p->n_shed, p->cur_queue);
+    #else
+      cprintf(" %d \t %d \t NO \t", p->wtime / ncpu, p->n_shed);
+    #endif
+
+    for (int i = 0; i < MLFQSIZE; i++) {
+      #ifdef MLFQ
+        cprintf(" %d \t", ((p->queue_ticks[i]-1) < 0?0:(p->queue_ticks[i]-1)));
+      #else
+        cprintf(" NO \t");
+      #endif
+    }
+    cprintf("\n");
   }
   release(&ptable.lock);
 

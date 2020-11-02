@@ -101,8 +101,6 @@ trap(struct trapframe *tf)
   if(myproc() && myproc()->killed && (tf->cs&3) == DPL_USER)
     exit();
 
-  // Run the code that will update the running process location in the process table.
-
   #if !defined(FCFS)
     // cprintf("It never got here\n");
     
@@ -111,16 +109,12 @@ trap(struct trapframe *tf)
     if(myproc() && myproc()->state == RUNNING && tf->trapno == T_IRQ0+IRQ_TIMER) {
       yield();
       #ifdef MLFQ
-        int to_punish = VMLFQ(myproc()->cur_queue, myproc()->time_slices);
-        if (to_punish == -1)
-          return;
-
-        if (to_punish == 1) {
+        if (myproc()->time_slices >= (1 << (myproc()->cur_queue + 1))) {
           punisher();
           yield();
         } else {
           inc_timeslice();
-          return;
+          return; 
         }
       #endif
     }

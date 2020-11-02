@@ -1,7 +1,7 @@
 #include "types.h"
 #include "user.h"
 
-int number_of_processes = 10;
+int number_of_processes = 20;
 
 int main(int argc, char *argv[])
 {
@@ -26,7 +26,7 @@ int main(int argc, char *argv[])
         {
           // iotime++;
           ;
-          sleep(200); //io time
+          sleep(10); //io time
         }
         else
         {
@@ -37,8 +37,8 @@ int main(int argc, char *argv[])
           }
         }
       }
-      printf(1, "Process: %d Finished\n", j);
-      ps();
+      // printf(1, "Process: %d Finished\n", j);
+      // ps();
       exit();
     }
     else{

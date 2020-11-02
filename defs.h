@@ -195,7 +195,7 @@ void            clearpteu(pde_t *pgdir, char *uva);
 
 // queue.c
 void            push(Queue* queue, struct proc* proc);
-Queue*          pop(Queue* queue);
+struct proc*    pop(Queue* queue);
 void            display(Queue* queue);
 int             get_size(Queue* queue);
 
@@ -215,5 +215,7 @@ int             get_size(Queue* queue);
 #define VMLFQ(a, b) (\
     (a > NPROC)?\
     -1: /*Error as the maximum number of queues are 5*/ \
-    ((1 << a == b)? 1: 0)\
+    ((b >= (1 << a))? 1: 0)\
 )
+
+#define AGE_THRES 2
