@@ -1,4 +1,4 @@
-# Better xv6 Operating System
+# Feature-rich xv6 Operating System
 
 ## Changes Done
 
