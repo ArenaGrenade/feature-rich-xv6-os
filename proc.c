@@ -130,7 +130,7 @@ found:
   acquire(&ptable.lock);
   // Set the process start time here.
   p->ctime = ticks;
-  cprintf("%d moved from %d to %d at %d\n", p->pid, -1, 0, p->ctime);
+  // cprintf("%d moved from %d to %d at %d\n", p->pid, -1, 0, p->ctime);
 
   // Set all default values at the start
   p->etime = 0;
@@ -340,7 +340,7 @@ exit(void)
   /*for (int i = 0; i < MLFQSIZE; i++)
     display(&queues[i]);
   cprintf("\n");*/
-  cprintf("%d moved from %d to %d at %d\n", curproc->pid, curproc->cur_queue, -1, ticks);
+  // cprintf("%d moved from %d to %d at %d\n", curproc->pid, curproc->cur_queue, -1, ticks);
   sched();
   panic("zombie exit");
 }
@@ -532,7 +532,7 @@ int age_processes(int queue_id) {
         if (p->mlfq_wtime / NCPU > AGE_THRES && p->cur_queue != 0) {
           p->cur_queue--;
           p->mlfq_wtime = 0;
-          cprintf("%d moved from %d to %d at %d\n", p->pid, p->cur_queue + 1, p->cur_queue, ticks);
+          // cprintf("%d moved from %d to %d at %d\n", p->pid, p->cur_queue + 1, p->cur_queue, ticks);
         }
         push(&queues[p->cur_queue], p);
       }
@@ -545,7 +545,7 @@ int age_processes(int queue_id) {
         if (p->mlfq_wtime / NCPU > AGE_THRES && p->cur_queue != 0) {
           p->cur_queue--;
           p->mlfq_wtime = 0;
-          cprintf("%d moved from %d to %d at %d\n", p->pid, p->cur_queue + 1, p->cur_queue, ticks);
+          // cprintf("%d moved from %d to %d at %d\n", p->pid, p->cur_queue + 1, p->cur_queue, ticks);
         }
         push(&queues[p->cur_queue], p);
       }
@@ -557,7 +557,7 @@ int age_processes(int queue_id) {
         if (p->mlfq_wtime / NCPU > AGE_THRES && p->cur_queue != 0) {
           p->cur_queue--;
           p->mlfq_wtime = 0;
-          cprintf("%d moved from %d to %d at %d\n", p->pid, p->cur_queue + 1, p->cur_queue, ticks);
+          // cprintf("%d moved from %d to %d at %d\n", p->pid, p->cur_queue + 1, p->cur_queue, ticks);
         }
         push(&queues[p->cur_queue], p);
       }
@@ -642,7 +642,7 @@ scheduler(void)
           
           if (p->cur_queue != MLFQSIZE - 1) {
             p->cur_queue++;
-            cprintf("%d moved from %d to %d at %d\n", p->pid, p->cur_queue - 1, p->cur_queue, ticks);
+            // cprintf("%d moved from %d to %d at %d\n", p->pid, p->cur_queue - 1, p->cur_queue, ticks);
             // cprintf("Shifted current queue to %d\n", p->cur_queue);
           }
         }
