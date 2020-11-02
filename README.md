@@ -56,6 +56,8 @@ It was also observed that having multiple CPUs changed the way that these schedu
 
 ### Multi-Level Feedback Queue Scheduling Algorithm (MLFQ)
 
+In this policy, when a process goes to sleep and returns, it retains the queue that is stays in. This enables the process to perform some minimal I/O and come back to the same queue. This way, the process would never leave the queue and can block it even incase other processes demand a higher priority. Malicious code can exploit this and create multiple processes that would end up blocking all the queues. For one, if the queue length is limited, then a queue can be completely blocked, this way every process below this queue would always stay there and never age. Now, if the size of the queue is dynamic, it would blow up in memory and slow down the system.
+
 1. Average wait time = 297.7
 2. Standard deviation of wait time = 194.04
 
